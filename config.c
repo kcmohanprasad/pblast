@@ -6,7 +6,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <getopt.h>
-#include <net/ip.h>
 
 #include "misc.h"
 

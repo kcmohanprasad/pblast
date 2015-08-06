@@ -45,231 +45,31 @@
 
 #include "misc.h"
 
-#define RTE_LOGTYPE_IPv4_MULTICAST RTE_LOGTYPE_USER1
-
-#define TIMER_RESOLUTION_CYCLES 20000000ULL
-static struct rte_timer timer;
-
-#define MAX_PORTS 16
-
-#define IPv4_VERSION    4
-#define IPv6_VERSION    6
-
-#define    MCAST_CLONE_PORTS    2
-#define    MCAST_CLONE_SEGS    2
-
-#define    PKT_MBUF_SIZE    (2048 + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
-#define    NB_PKT_MBUF    8192
-
-#define    HDR_MBUF_SIZE    (sizeof(struct rte_mbuf) + 2 * RTE_PKTMBUF_HEADROOM)
-#define    NB_HDR_MBUF    (NB_PKT_MBUF * MAX_PORTS)
-
-#define    CLONE_MBUF_SIZE    (sizeof(struct rte_mbuf))
-#define    NB_CLONE_MBUF    (NB_PKT_MBUF * MCAST_CLONE_PORTS * MCAST_CLONE_SEGS * 2)
-
-// allow max jumbo frame 9.5 KB
-#define    JUMBO_FRAME_MAX_SIZE    0x2600
-
-#define MAX_PKT_BURST 32
-//#define BURST_TX_DRAIN_US 100 // TX drain every ~100us
-
-// Configure how many packets ahead to prefetch, when reading packets
-#define PREFETCH_OFFSET    3
-
-// Configurable number of RX/TX ring descriptors
-
-#define RTE_TEST_RX_DESC_DEFAULT 128
-#define RTE_TEST_TX_DESC_DEFAULT 512
-static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
-static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
-
-// ethernet addresses of ports
-static struct ether_addr ports_eth_addr[MAX_PORTS];
+uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
+uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
 
 // mask of enabled ports
-static uint32_t enabled_port_mask = 0;
+uint32_t enabled_port_mask = 0;
 
-static uint8_t nb_ports = 0;
+uint8_t nb_ports = 0;
 
-static int rx_queue_per_lcore = 1;
+int rx_queue_per_lcore = 1;
 
-struct mbuf_table {
-    uint16_t len;
-    struct rte_mbuf *m_table[MAX_PKT_BURST];
-};
-
-int traffic_status = 1;
-
-#define MAX_RX_QUEUE_PER_LCORE 16
-#define MAX_TX_QUEUE_PER_PORT 16
-struct lcore_queue_conf {
-    uint64_t tx_tsc;
-    uint16_t n_rx_queue;
-    uint8_t rx_queue_list[MAX_RX_QUEUE_PER_LCORE];
-    uint16_t tx_queue_id[MAX_PORTS];
-    struct mbuf_table tx_mbufs[MAX_PORTS];
-} __rte_cache_aligned;
-static struct lcore_queue_conf lcore_queue_conf[RTE_MAX_LCORE];
-
-static const struct rte_eth_conf port_conf = {
-    .rxmode = {
-        .max_rx_pkt_len = JUMBO_FRAME_MAX_SIZE,
-        .split_hdr_size = 0,
-        .header_split   = 0, /**< Header Split disabled */
-        .hw_ip_checksum = 0, /**< IP checksum offload disabled */
-        .hw_vlan_filter = 0, /**< VLAN filtering disabled */
-        .jumbo_frame    = 1, /**< Jumbo Frame Support enabled */
-        .hw_strip_crc   = 0, /**< CRC stripped by hardware */
-    },
-    .txmode = {
-        .mq_mode = ETH_MQ_TX_NONE,
-    },
-};
-
-static struct rte_mempool *packet_pool;
-
-struct port_stats {
-    uint64_t rx_packets;
-    uint64_t tx_packets;
-    uint64_t tx_dropped;
-};
-static struct port_stats port_stats[RTE_MAX_ETHPORTS];
-
-struct rte_fbk_hash_table *mcast_hash = NULL;
-
-struct mcast_group_params {
-    uint32_t ip;
-    uint16_t port_mask;
-};
-
-
-#define N_MCAST_GROUPS \
-    (sizeof (mcast_group_table) / sizeof (mcast_group_table[0]))
-
-
-// Send burst of packets on an output interface
-static void send_burst(struct lcore_queue_conf *qconf, uint8_t port)
-{
-    struct rte_mbuf **m_table;
-    uint16_t n, queueid;
-    int ret;
-
-    queueid = qconf->tx_queue_id[port];
-    m_table = (struct rte_mbuf **)qconf->tx_mbufs[port].m_table;
-    n = qconf->tx_mbufs[port].len;
-
-    ret = rte_eth_tx_burst(port, queueid, m_table, n);
-	port_stats[port].tx_packets += ret;
-
-    if (unlikely(ret < n))
-        port_stats[port].tx_dropped += n - ret;
-
-    while (unlikely (ret < n)) {
-        rte_pktmbuf_free(m_table[ret]);
-        ret++;
-    }
-
-    qconf->tx_mbufs[port].len = 0;
-}
-
- // Write new Ethernet header to the outgoing packet,
- // and put it into the outgoing queue for the given port.
-static inline void
-mcast_send_pkt(struct rte_mbuf *pkt, struct lcore_queue_conf *qconf, uint8_t port)
-{
-    uint16_t len;
-
-    // Put new packet into the output queue
-    len = qconf->tx_mbufs[port].len;
-    qconf->tx_mbufs[port].m_table[len] = pkt;
-    qconf->tx_mbufs[port].len = ++len;
-
-    // Transmit packets
-    if (unlikely(MAX_PKT_BURST == len))
-        send_burst(qconf, port);
-}
-
-// Main processing loop
-static int main_loop(__rte_unused void *dummy)
-{
-    unsigned lcore_id;
-    struct rte_mbuf *m;
-    struct ether_hdr *eth_hdr;
-    struct ipv4_hdr *ipv4_hdr;
-    struct tcp_hdr *tcp_hdr;
-    size_t pkt_size;
-    int port;
-    struct lcore_queue_conf *qconf;
-
-    lcore_id = rte_lcore_id();
-
-    qconf = &lcore_queue_conf[lcore_id];
-
-    uint8_t dst_mac[ETHER_ADDR_LEN] = {0x90, 0xe2, 0xba, 0x1a, 0x2f, 0xf2};
-    uint8_t src_mac[ETHER_ADDR_LEN] = {0x90, 0xe2, 0xba, 0x1a, 0x4a, 0xe4};
-    uint8_t dst_addr[4] = {0xa, 0x00, 0x00, 0xbb};
-    uint8_t src_addr[4] = {0xa, 0x00, 0x00, 0xba};
-
-	while (1) {
-		if (traffic_status == 0)
-		{
-			sleep (1);
-			continue;
-		}
-
-		//for(count =0;count<256;count++) {
-        port = rte_lcore_to_socket_id(lcore_id);
-        m = rte_pktmbuf_alloc(packet_pool);
-        pkt_size = sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) + sizeof(struct tcp_hdr);
-        m->data_len = pkt_size;
-        m->pkt_len = pkt_size;
-
-        tcp_hdr = rte_pktmbuf_mtod(m, struct tcp_hdr *);
-        tcp_hdr->src_port = htons(9000);
-        tcp_hdr->dst_port = htons(80);
-        tcp_hdr->sent_seq = 0;
-        tcp_hdr->data_off = 0x50;
-        tcp_hdr->rx_win = htons(65535);;
-        tcp_hdr->tcp_flags = 0x02;
-
-        //ipv4_hdr = rte_pktmbuf_mtod(m, struct ipv4_hdr *);
-        ipv4_hdr = (struct ipv4_hdr *) rte_pktmbuf_prepend(m, (uint16_t)sizeof(struct ipv4_hdr));
-        memcpy(&ipv4_hdr->src_addr,src_addr,4);
-        memcpy(&ipv4_hdr->dst_addr,dst_addr,4);
-        ipv4_hdr->version_ihl = (IPv4_VERSION << 4) | (sizeof(struct ipv4_hdr) /4);
-        ipv4_hdr->next_proto_id = 6;
-        ipv4_hdr->time_to_live = 64;
-        ipv4_hdr->type_of_service = 0;
-        ipv4_hdr->packet_id = htonl (54321);
-        ipv4_hdr->fragment_offset = 0;
-        ipv4_hdr->total_length = htons(sizeof(struct ipv4_hdr) + sizeof(struct tcp_hdr));
-        ipv4_hdr->hdr_checksum = 0;
-        ipv4_hdr->hdr_checksum = rte_ipv4_phdr_cksum(ipv4_hdr, ipv4_hdr->total_length >> 1);
-
-        tcp_hdr->cksum = 0;
-        tcp_hdr->cksum = rte_ipv4_udptcp_cksum(ipv4_hdr,tcp_hdr);
-        tcp_hdr->cksum = rte_ipv4_phdr_cksum(ipv4_hdr,20);
-
-        //eth_hdr = rte_pktmbuf_mtod(m, struct ether_hdr *);
-        eth_hdr = (struct ether_hdr *) rte_pktmbuf_prepend(m, (uint16_t)sizeof(struct ether_hdr));
-        memcpy(&eth_hdr->s_addr, src_mac, ETHER_ADDR_LEN);
-        memcpy(&eth_hdr->d_addr, dst_mac, ETHER_ADDR_LEN);
-        eth_hdr->ether_type = rte_cpu_to_be_16(ETHER_TYPE_IPv4);
-
-        mcast_send_pkt(m, qconf, port);
-    }
-}
+int traffic_status = 0;
 
 // Master processing loop
 int master_loop(void )
 {
-    int guiSocket, index, portid, i;
-    int guiPort = 8454, num_fds;
+    int guiSocket, index, portid;
+    int num_fds;
     uint64_t prev_tsc = 0, cur_tsc, diff_tsc;
 	struct pollfd my_fds;
 	char port[] = "ports";
 	char port_name[10];
 	int port_status = 1;
+
+	int guiPort = 8454, statsPort = 7454;
+	char statsServer[] = "192.168.44.253";
 
 	if (database_connect(port)) {
 		rte_exit(EXIT_FAILURE, "Cannot connect to Database\n");
@@ -281,6 +81,7 @@ int master_loop(void )
 		insert_table(portid, port_name, port_status);
 	}
 
+	statsSocket = udpclient(statsServer, statsPort);
 	guiSocket = udpsocket(guiPort);
 
 	my_fds.fd = guiSocket;
@@ -320,22 +121,14 @@ int master_loop(void )
         switch (buffer[index++]) {
 			case START_TRAFFIC:
 				traffic_status = 1;
-				printf("Traffic Status %d\n",traffic_status);
+				//printf("Traffic Status %d\n",traffic_status);
 				break;
 			case STOP_TRAFFIC:
 				traffic_status = 0;
-				printf("Traffic Status %d\n",traffic_status);
+				//printf("Traffic Status %d\n",traffic_status);
 				break;
 			case CONFIG_TRAFFIC:
-				traffic_status = 0;
-				printf("Traffic Status %d\n",traffic_status);
-				break;
-			case SEND_TX_PPS:
-				index = 0;
-				//buffer[index++] = 54;
-				for(i = 0; i < 8; i++) buffer[index++] = port_stats[0].tx_packets >> (8-1-i)*8;
-				send_msg(guiSocket,buffer,index);
-				printf("Sent Tx packets to UI\n");
+				configPackets(buffer);
 				break;
 		}
 	}
@@ -501,18 +294,25 @@ static void display_statistics(__attribute__((unused)) struct rte_timer *tim,
       __attribute__((unused)) void *arg)
 {
     int i;
-    printf("======  ============  ============  ============  ============\n"
-           " Port    rx_packets    tx_packets    tx_dropped    tx_thr_put \n"
-           "------  ------------  ------------  ------------  ------------\n");
+//    printf("======  ============  ============  ============  ============\n"
+//           " Port    rx_packets    tx_packets    tx_dropped    tx_thr_put \n"
+//           "------  ------------  ------------  ------------  ------------\n");
     for (i = 0; i < nb_ports; i++) {
-        printf("%3d %13"PRIu64" %13"PRIu64" %13"PRIu64" %15"PRIu64"\n", i,
-                        port_stats[i].rx_packets,
-                        port_stats[i].tx_packets,
-                        port_stats[i].tx_dropped,
-                        port_stats[i].tx_packets*54*8);
+        unsigned char buffer[512];
+        int size =  0, j;
+        uint64_t rx_packets = port_stats[i].rx_packets;
+        uint64_t tx_packets = port_stats[i].tx_packets;
+        uint64_t tx_dropped = port_stats[i].tx_dropped;
         port_stats[i].rx_packets = 0;
         port_stats[i].tx_packets = 0;
         port_stats[i].tx_dropped = 0;
+
+		for(j = 0; j < 8; j++) buffer[size++] = tx_packets >> (8-1-j)*8;
+		for(j = 0; j < 8; j++) buffer[size++] = tx_dropped >> (8-1-j)*8;
+		for(j = 0; j < 8; j++) buffer[size++] = rx_packets >> (8-1-j)*8;
+		send_msg ( statsSocket, buffer, size);
+//        printf("%3d %13"PRIu64" %13"PRIu64" %13"PRIu64" %15"PRIu64"\n\n", i,
+//                        rx_packets, tx_packets, tx_dropped, tx_packets*pblast.payloadSize*8);
     }
 }
 
@@ -612,7 +412,7 @@ int main(int argc, char **argv)
         print_ethaddr(" Address:", &ports_eth_addr[portid]);
         printf(", ");
 
-        /* init one RX queue */
+        // init one RX queue
         queueid = 0;
         printf("rxq=%hu ", queueid);
         fflush(stdout);
@@ -624,7 +424,7 @@ int main(int argc, char **argv)
             rte_exit(EXIT_FAILURE, "rte_eth_tx_queue_setup: err=%d, port=%d\n",
                   ret, portid);
 
-        /* init one TX queue per couple (lcore,port) */
+        // init one TX queue per couple (lcore,port)
         queueid = 0;
 
         RTE_LCORE_FOREACH(lcore_id) {

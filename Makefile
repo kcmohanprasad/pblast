@@ -8,10 +8,10 @@ RTE_TARGET ?= x86_64-native-linuxapp-gcc
 include $(RTE_SDK)/mk/rte.vars.mk
 
 # binary name
-APP = test
+APP = pblast
 
 # all source are stored in SRCS-y
-SRCS-y := main.c socket.c db.c config.c
+SRCS-y := socket.c db.c config.c core.c main.c 
 
 CFLAGS += -O3 $(USER_FLAGS)
 CFLAGS += $(WERROR_FLAGS) -g -I/usr/include/mysql `mysql_config --cflags --libs`

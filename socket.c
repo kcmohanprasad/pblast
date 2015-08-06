@@ -9,12 +9,12 @@
 #include <netdb.h>
 #include <signal.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include <search.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <netdb.h>
-
 
 #include "misc.h"
 
@@ -50,14 +50,14 @@ int udpsocket( int myport )
 }
 
 //Client
-int udpclient( int theirport )
+int udpclient( char* host, int theirport )
 {
-    int sockfd;
-	struct sockaddr_in their_addr;
+	int sockfd;
+	//struct sockaddr_in their_addr;
     //const char* he = host.c_str();
 	their_addr.sin_family = AF_INET; // host byte order
     their_addr.sin_port = htons(theirport); // short, network byte order
-    //inet_pton(AF_INET, he, &their_addr.sin_addr);
+    inet_pton(AF_INET, host, &their_addr.sin_addr);
     memset(&(their_addr.sin_zero),0, 8); // zero the rest of the struct
 
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0))== -1)
