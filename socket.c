@@ -23,10 +23,10 @@ static struct sockaddr_in their_addr;
 //Server
 int udpsocket( int myport )
 {
-	struct sockaddr_in my_addr;
+    struct sockaddr_in my_addr;
     int sockfd;
 
-	if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0))== -1)
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0))== -1)
     {
         perror("Socket");
         exit(1);
@@ -37,12 +37,12 @@ int udpsocket( int myport )
     my_addr.sin_port = htons(myport); // short, network byte order
 
     memset(&(my_addr.sin_zero),0, 8); // zero the rest of the struct
-	int optval = 1;
-	setsockopt(sockfd,SOL_SOCKET,SO_REUSEADDR,(void*)&optval,sizeof(optval));
+    int optval = 1;
+    setsockopt(sockfd,SOL_SOCKET,SO_REUSEADDR,(void*)&optval,sizeof(optval));
 
     // binding to the socket
     if (bind(sockfd, (struct sockaddr *)&my_addr,sizeof(struct sockaddr)) == -1)  
-	{
+    {
         perror("Bind ");
         exit(1);
     }
@@ -52,10 +52,9 @@ int udpsocket( int myport )
 //Client
 int udpclient( char* host, int theirport )
 {
-	int sockfd;
-	//struct sockaddr_in their_addr;
-    //const char* he = host.c_str();
-	their_addr.sin_family = AF_INET; // host byte order
+    int sockfd;
+
+    their_addr.sin_family = AF_INET; // host byte order
     their_addr.sin_port = htons(theirport); // short, network byte order
     inet_pton(AF_INET, host, &their_addr.sin_addr);
     memset(&(their_addr.sin_zero),0, 8); // zero the rest of the struct
@@ -70,7 +69,7 @@ int udpclient( char* host, int theirport )
 
 void send_msg ( int sockfd, unsigned char * outMsgP, int len)
 {   
-	int numbytes;
+    int numbytes;
     if ((numbytes = sendto(sockfd,outMsgP , len, 0,(struct sockaddr *)&their_addr, sizeof(struct sockaddr))) == -1)
     {
         perror("Send to ");
@@ -81,8 +80,8 @@ void send_msg ( int sockfd, unsigned char * outMsgP, int len)
 
 int recv_msg(int sockfd, unsigned char * inBufP )
 {
-	socklen_t addr_len;
-	int numbytes = 0,flag =0;
+    socklen_t addr_len;
+    int numbytes = 0,flag =0;
 
     addr_len = sizeof(struct sockaddr);
 

@@ -63,35 +63,35 @@ int master_loop(void )
     int guiSocket, index, portid;
     int num_fds;
     uint64_t prev_tsc = 0, cur_tsc, diff_tsc;
-	struct pollfd my_fds;
-	char port[] = "ports";
-	char port_name[10];
-	int port_status = 1;
+    struct pollfd my_fds;
+    char port[] = "ports";
+    char port_name[10];
+    int port_status = 1;
 
-	int guiPort = 8454, statsPort = 7454;
-	char statsServer[] = "192.168.44.253";
+    int guiPort = 8454, statsPort = 7454;
+    char statsServer[] = "192.168.44.2";
 
-	if (database_connect(port)) {
-		rte_exit(EXIT_FAILURE, "Cannot connect to Database\n");
-	}
+    if (database_connect(port)) {
+        rte_exit(EXIT_FAILURE, "Cannot connect to Database\n");
+    }
 
-	//Update Database with Port Info
+    //Update Database with Port Info
     for (portid = 0; portid < nb_ports; portid++) {
-		sprintf(port_name,"Port %d",portid);
-		insert_table(portid, port_name, port_status);
-	}
+        sprintf(port_name,"Port %d",portid);
+        insert_table(portid, port_name, port_status);
+    }
 
-	statsSocket = udpclient(statsServer, statsPort);
-	guiSocket = udpsocket(guiPort);
+    statsSocket = udpclient(statsServer, statsPort);
+    guiSocket = udpsocket(guiPort);
 
-	my_fds.fd = guiSocket;
-	my_fds.events = POLLIN;
-	my_fds.revents = 0;
-	num_fds = 1;
+    my_fds.fd = guiSocket;
+    my_fds.events = POLLIN;
+    my_fds.revents = 0;
+    num_fds = 1;
 
     while(1)
     {
-		//Timer
+        //Timer
         cur_tsc = rte_rdtsc();
         diff_tsc = cur_tsc - prev_tsc;
         if (diff_tsc > TIMER_RESOLUTION_CYCLES) {
@@ -99,39 +99,39 @@ int master_loop(void )
             prev_tsc = cur_tsc;
         }
 
-		if (poll(&my_fds, num_fds, 100) == -1)
-		{
-    		perror("poll");
-    		exit(0);
-    	}
-		if (my_fds.revents != POLLIN)
-			continue;
+        if (poll(&my_fds, num_fds, 100) == -1)
+        {
+            perror("poll");
+            exit(0);
+        }
+        if (my_fds.revents != POLLIN)
+            continue;
 
         unsigned char buffer[512];
         int size = recv_msg(guiSocket,buffer);
         if (size <= 0)
             continue;
 
-		index = 0;
+        index = 0;
 
 //printf("Size %d\n",size);
 //for (i=0;i<size ;i++ )
 //    printf(" %d ",buffer[i]);
 //printf("\nSize %d\n",size);
         switch (buffer[index++]) {
-			case START_TRAFFIC:
-				traffic_status = 1;
-				//printf("Traffic Status %d\n",traffic_status);
-				break;
-			case STOP_TRAFFIC:
-				traffic_status = 0;
-				//printf("Traffic Status %d\n",traffic_status);
-				break;
-			case CONFIG_TRAFFIC:
-				configPackets(buffer);
-				break;
-		}
-	}
+            case START_TRAFFIC:
+                traffic_status = 1;
+                printf("Traffic Status %d\n",traffic_status);
+                break;
+            case STOP_TRAFFIC:
+                traffic_status = 0;
+                //printf("Traffic Status %d\n",traffic_status);
+                break;
+            case CONFIG_TRAFFIC:
+                configPackets(buffer);
+                break;
+        }
+    }
 }
 
 /* display usage */
@@ -294,9 +294,9 @@ static void display_statistics(__attribute__((unused)) struct rte_timer *tim,
       __attribute__((unused)) void *arg)
 {
     int i;
-//    printf("======  ============  ============  ============  ============\n"
-//           " Port    rx_packets    tx_packets    tx_dropped    tx_thr_put \n"
-//           "------  ------------  ------------  ------------  ------------\n");
+    printf("\n======  ============  ============  ============  ============\n"
+           " Port    rx_packets    tx_packets    tx_dropped    tx_thr_put \n"
+           "------  ------------  ------------  ------------  ------------\n");
     for (i = 0; i < nb_ports; i++) {
         unsigned char buffer[512];
         int size =  0, j;
@@ -307,12 +307,13 @@ static void display_statistics(__attribute__((unused)) struct rte_timer *tim,
         port_stats[i].tx_packets = 0;
         port_stats[i].tx_dropped = 0;
 
-		for(j = 0; j < 8; j++) buffer[size++] = tx_packets >> (8-1-j)*8;
-		for(j = 0; j < 8; j++) buffer[size++] = tx_dropped >> (8-1-j)*8;
-		for(j = 0; j < 8; j++) buffer[size++] = rx_packets >> (8-1-j)*8;
-		send_msg ( statsSocket, buffer, size);
-//        printf("%3d %13"PRIu64" %13"PRIu64" %13"PRIu64" %15"PRIu64"\n\n", i,
-//                        rx_packets, tx_packets, tx_dropped, tx_packets*pblast.payloadSize*8);
+        buffer[size++] = i;
+        for(j = 0; j < 8; j++) buffer[size++] = tx_packets >> (8-1-j)*8;
+        for(j = 0; j < 8; j++) buffer[size++] = tx_dropped >> (8-1-j)*8;
+        for(j = 0; j < 8; j++) buffer[size++] = rx_packets >> (8-1-j)*8;
+        send_msg ( statsSocket, buffer, size);
+        printf("%3d %13"PRIu64" %13"PRIu64" %13"PRIu64" %15"PRIu64"\n", i,
+                        rx_packets, tx_packets, tx_dropped, tx_packets*pblast.payloadSize*8);
     }
 }
 
@@ -385,7 +386,7 @@ int main(int argc, char **argv)
         while (rte_lcore_is_enabled(rx_lcore_id) == 0 ||
                qconf->n_rx_queue == (unsigned)rx_queue_per_lcore) {
 
-            rx_lcore_id ++;
+            rx_lcore_id++;
             qconf = &lcore_queue_conf[rx_lcore_id];
 
             if (rx_lcore_id >= RTE_MAX_LCORE)
@@ -395,8 +396,7 @@ int main(int argc, char **argv)
         qconf->n_rx_queue++;
 
         /* init port */
-        printf("Initializing port %d on lcore %u... ", portid,
-               rx_lcore_id);
+        printf("Initializing port %d on lcore %u... ", portid, rx_lcore_id);
         fflush(stdout);
 
         n_tx_queue = nb_lcores;
@@ -405,8 +405,7 @@ int main(int argc, char **argv)
         ret = rte_eth_dev_configure(portid, 1, (uint16_t)n_tx_queue,
                         &port_conf);
         if (ret < 0)
-            rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%d\n",
-                  ret, portid);
+            rte_exit(EXIT_FAILURE, "Cannot configure device: err=%d, port=%d\n", ret, portid);
 
         rte_eth_macaddr_get(portid, &ports_eth_addr[portid]);
         print_ethaddr(" Address:", &ports_eth_addr[portid]);
